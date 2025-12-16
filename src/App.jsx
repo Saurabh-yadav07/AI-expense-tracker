@@ -1,11 +1,6 @@
 import React, { useState } from "react";
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({
-  apiKey: import.meta.env.VITE_GEMINI_API_KEY,
-});
-
-
 function App() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -14,25 +9,66 @@ function App() {
 
   const [aiInput, setAiInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
   const [expenses, setExpenses] = useState([]);
 
+  // Gemini client (Vite env variable)
+  const ai = new GoogleGenAI({
+    apiKey: import.meta.env.VITE_GEMINI_API_KEY,
+  });
+
+  /* ------------------ MANUAL ADD ------------------ */
   const handleAddManual = () => {
     if (!title || !description || !amount || !date) return;
-    const newExpense = {
-      title,
-      description,
-      amount: parseFloat(amount),
-      date: new Date(date),
-    };
-    setExpenses([...expenses, newExpense]);
+
+    setExpenses((prev) => [
+      ...prev,
+      {
+        title,
+        description,
+        amount: Number(amount),
+        date: new Date(date),
+      },
+    ]);
+
     setTitle("");
     setDescription("");
     setAmount("");
     setDate("");
   };
 
-  const handleAddAI = async () => {
-    if (!aiInput) return;
+  /* ------------------ VOICE INPUT ------------------ */
+  const handleVoiceInput = () => {
+    if (!("webkitSpeechRecognition" in window)) {
+      alert("Voice recognition not supported in this browser");
+      return;
+    }
+
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setListening(true);
+    recognition.onend = () => setListening(false);
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setAiInput(transcript);
+
+      // Auto process after voice
+      setTimeout(() => handleAddAI(transcript), 400);
+    };
+
+    recognition.onerror = () => setListening(false);
+
+    recognition.start();
+  };
+
+  /* ------------------ AI ADD ------------------ */
+  const handleAddAI = async (inputText) => {
+    const text = inputText || aiInput;
+    if (!text) return;
 
     setLoading(true);
 
@@ -40,24 +76,18 @@ function App() {
       const today = new Date().toISOString().split("T")[0];
 
       const prompt = `
-You are a JSON API.
-
 Return ONLY valid JSON.
-Do not include explanation, text, or markdown.
 
-Schema:
 {
-  "Title": string,
-  "Description": string,
+  "Title": "",
+  "Description": "",
   "Amount": number,
   "Date": "YYYY-MM-DD"
 }
 
-Text: "${aiInput}"
-
+Text: "${text}"
 If date is missing, use ${today}
 `;
-
 
       const response = await ai.models.generateContent({
         model: "gemini-2.0-flash",
@@ -65,55 +95,58 @@ If date is missing, use ${today}
       });
 
       const rawText = response.text;
-      console.log("AI Raw Response:", rawText);
 
-      const cleanedResponse = rawText
+      const cleaned = rawText
         .replace(/```json/gi, "")
         .replace(/```/g, "")
         .trim();
 
-      const data = JSON.parse(cleanedResponse);
+      const data = JSON.parse(cleaned);
 
-      const newExpense = {
-        title: data.Title || "No Title",
-        description: data.Description || "No Description",
-        amount: Number(data.Amount) || 0,
-        date: data.Date ? new Date(data.Date) : new Date(),
-      };
+      setExpenses((prev) => [
+        ...prev,
+        {
+          title: data.Title || "Unknown",
+          description: data.Description || "No description",
+          amount: Number(data.Amount) || 0,
+          date: new Date(data.Date || today),
+        },
+      ]);
 
-      setExpenses((prev) => [...prev, newExpense]);
       setAiInput("");
     } catch (error) {
-      console.error("Error processing AI input:", error);
+      console.error(error);
       alert("AI response could not be parsed. Try again.");
     } finally {
       setLoading(false);
     }
   };
 
+  /* ------------------ UI ------------------ */
   return (
     <div className="p-6 max-w-md mx-auto">
-      <h1 className="text-2xl font-bold mb-4">AI Expense Tracker</h1>
+      <h1 className="text-2xl font-bold mb-4">
+        AI Expense Tracker (Gemini + Voice)
+      </h1>
 
+      {/* MANUAL */}
       <div className="border p-4 mb-6">
-        <h2 className="text-xl font-semibold mb-2">Add Expense Manually</h2>
+        <h2 className="text-xl font-semibold mb-2">
+          Add Expense Manually
+        </h2>
 
         <input
-          type="text"
           placeholder="Title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           className="border p-2 w-full mb-2"
         />
-
         <input
-          type="text"
           placeholder="Description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           className="border p-2 w-full mb-2"
         />
-
         <input
           type="number"
           placeholder="Amount"
@@ -121,7 +154,6 @@ If date is missing, use ${today}
           onChange={(e) => setAmount(e.target.value)}
           className="border p-2 w-full mb-2"
         />
-
         <input
           type="date"
           value={date}
@@ -137,19 +169,31 @@ If date is missing, use ${today}
         </button>
       </div>
 
+      {/* AI */}
       <div className="border p-4 mb-6">
-        <h2 className="text-xl font-semibold mb-2">Add Expense via AI</h2>
+        <h2 className="text-xl font-semibold mb-2">
+          Add Expense via AI / Voice
+        </h2>
 
-        <input
-          type="text"
-          placeholder="e.g. 100 rupees for groceries on 5th May"
-          value={aiInput}
-          onChange={(e) => setAiInput(e.target.value)}
-          className="border p-2 w-full mb-4"
-        />
+        <div className="flex gap-2 mb-4">
+          <input
+            placeholder="Type or speak your expense"
+            value={aiInput}
+            onChange={(e) => setAiInput(e.target.value)}
+            className="border p-2 flex-1"
+          />
+          <button
+            onClick={handleVoiceInput}
+            className={`px-4 rounded text-white ${
+              listening ? "bg-red-500" : "bg-gray-700"
+            }`}
+          >
+            🎤
+          </button>
+        </div>
 
         <button
-          onClick={handleAddAI}
+          onClick={() => handleAddAI()}
           disabled={loading}
           className="bg-green-500 text-white p-2 w-full"
         >
@@ -157,18 +201,18 @@ If date is missing, use ${today}
         </button>
       </div>
 
+      {/* LIST */}
       <div>
         <h2 className="text-xl font-semibold mb-2">Expenses</h2>
-
         {expenses.length === 0 ? (
           <p>No expenses added yet.</p>
         ) : (
           <ul>
-            {expenses.map((expense, index) => (
-              <li key={index} className="border-b py-2">
-                <strong>{expense.title}</strong> – {expense.description} – $
-                {expense.amount.toFixed(2)} on{" "}
-                {expense.date.toLocaleDateString()}
+            {expenses.map((e, i) => (
+              <li key={i} className="border-b py-2">
+                <strong>{e.title}</strong> – {e.description} – ₹
+                {e.amount.toFixed(2)} on{" "}
+                {e.date.toLocaleDateString()}
               </li>
             ))}
           </ul>
